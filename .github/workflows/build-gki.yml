@@ -41,6 +41,21 @@ on:
           - 'arm64'
           - 'both'
         default: 'x86_64'
+      enable_susfs:
+        description: 'Apply SUSFS kernel patches (requires KernelSU-Next + dev-susfs)'
+        required: false
+        type: boolean
+        default: false
+      susfs_ref:
+        description: 'susfs4ksu branch matching the kernel generation'
+        required: false
+        type: string
+        default: 'gki-android16-6.12'
+      susfs_ksu_ref:
+        description: 'KernelSU-Next ref/branch that already has SUSFS glue'
+        required: false
+        type: string
+        default: 'dev-susfs'
 
 jobs:
   build:
@@ -52,3 +67,6 @@ jobs:
       ksu_variant: ${{ inputs.ksu_variant }}
       arch: ${{ inputs.arch }}
       release_build: false
+      enable_susfs: ${{ inputs.enable_susfs }}
+      susfs_ref: ${{ inputs.susfs_ref }}
+      susfs_ksu_ref: ${{ inputs.susfs_ksu_ref }}

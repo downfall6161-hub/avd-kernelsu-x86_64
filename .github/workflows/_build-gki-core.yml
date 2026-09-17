@@ -28,6 +28,21 @@ on:
         required: false
         type: boolean
         default: false
+      enable_susfs:
+        description: 'Apply SUSFS kernel patches (requires KernelSU-Next)'
+        required: false
+        type: boolean
+        default: false
+      susfs_ref:
+        description: 'susfs4ksu branch matching the kernel generation'
+        required: false
+        type: string
+        default: 'gki-android16-6.12'
+      susfs_ksu_ref:
+        description: 'KernelSU-Next ref/branch that already has SUSFS glue (e.g. dev-susfs)'
+        required: false
+        type: string
+        default: 'dev-susfs'
 
 jobs:
   prepare-matrix:
@@ -171,7 +186,7 @@ jobs:
       - name: Setup Tools & Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y repo git curl
+          sudo apt-get install -y repo git curl patch
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           echo "KSU_HAS_INDIRECT_SAFE_CHECK=false" >> "$GITHUB_ENV"
@@ -286,7 +301,11 @@ jobs:
           fi
 
           API_LABEL="API$(echo "$API_LEVEL" | sed -E 's/[^0-9A-Za-z._-]+/-/g; s/^-+//; s/-+$//')"
-          DIST_NAME="dist-${ANDROID_LABEL}-${API_LABEL}-${KERNEL_VERSION}-${ARCH_LABEL}-${BUILD_ID}-${KSU_VERSION_LABEL}"
+          SUSFS_SUFFIX=""
+          if [ "${{ inputs.enable_susfs }}" = "true" ]; then
+            SUSFS_SUFFIX="-susfs"
+          fi
+          DIST_NAME="dist-${ANDROID_LABEL}-${API_LABEL}-${KERNEL_VERSION}-${ARCH_LABEL}-${BUILD_ID}-${KSU_VERSION_LABEL}${SUSFS_SUFFIX}"
           ARTIFACT_NAME="$DIST_NAME"
 
           echo "Resolved DIST_NAME: $DIST_NAME"
@@ -298,6 +317,7 @@ jobs:
           echo "API_LABEL=$API_LABEL" >> "$GITHUB_ENV"
           echo "DIST_NAME=$DIST_NAME" >> "$GITHUB_ENV"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+          echo "SUSFS_ENABLED=${{ inputs.enable_susfs }}" >> "$GITHUB_ENV"
           echo "dist_name=$DIST_NAME" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -328,23 +348,36 @@ jobs:
         run: |
           cd kernel
 
-          case "${{ inputs.ksu_variant }}" in
-            KernelSU)
-              KSU_REPO_URL="https://github.com/tiann/KernelSU.git"
-              KSU_REPO_DIR="KernelSU"
-              ;;
-            KernelSU-Next)
-              KSU_REPO_URL="https://github.com/KernelSU-Next/KernelSU-Next.git"
-              KSU_REPO_DIR="KernelSU-Next"
-              ;;
-            *)
-              echo "Unsupported KernelSU variant: ${{ inputs.ksu_variant }}"
+          EFFECTIVE_KSU_REF="$KSU_REF"
+
+          if [ "${{ inputs.enable_susfs }}" = "true" ]; then
+            if [ "${{ inputs.ksu_variant }}" != "KernelSU-Next" ]; then
+              echo "SUSFS builds require ksu_variant=KernelSU-Next; the dev-susfs fork provides the driver-side SUSFS glue."
               exit 1
-              ;;
-          esac
+            fi
+            KSU_REPO_URL="https://github.com/pershoot/KernelSU-Next.git"
+            KSU_REPO_DIR="KernelSU-Next"
+            EFFECTIVE_KSU_REF="${{ inputs.susfs_ksu_ref }}"
+            echo "SUSFS enabled: using $KSU_REPO_URL @ $EFFECTIVE_KSU_REF"
+          else
+            case "${{ inputs.ksu_variant }}" in
+              KernelSU)
+                KSU_REPO_URL="https://github.com/tiann/KernelSU.git"
+                KSU_REPO_DIR="KernelSU"
+                ;;
+              KernelSU-Next)
+                KSU_REPO_URL="https://github.com/KernelSU-Next/KernelSU-Next.git"
+                KSU_REPO_DIR="KernelSU-Next"
+                ;;
+              *)
+                echo "Unsupported KernelSU variant: ${{ inputs.ksu_variant }}"
+                exit 1
+                ;;
+            esac
+          fi
 
           git clone "$KSU_REPO_URL" "$KSU_REPO_DIR"
-          "./$KSU_REPO_DIR/kernel/setup.sh" "$KSU_REF"
+          "./$KSU_REPO_DIR/kernel/setup.sh" "$EFFECTIVE_KSU_REF"
 
           rm -rf common/drivers/kernelsu
           cp -r "$KSU_REPO_DIR/kernel" common/drivers/kernelsu
@@ -380,7 +413,7 @@ jobs:
           fi
 
           KSU_HAS_INDIRECT_SAFE_CHECK=false
-          TAG_OR_COMMIT="$KSU_REF"
+          TAG_OR_COMMIT="$EFFECTIVE_KSU_REF"
           if [[ "$TAG_OR_COMMIT" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             KSU_MAJOR="${BASH_REMATCH[1]}"
             KSU_MINOR="${BASH_REMATCH[2]}"
@@ -397,7 +430,7 @@ jobs:
           fi
 
           KSU_GIT_VERSION=$(git rev-list --count HEAD)
-          KSU_VERSION_TAG=$(git describe --tags --abbrev=0 2>/dev/null || printf '%s' "$KSU_REF")
+          KSU_VERSION_TAG=$(git describe --tags --abbrev=0 2>/dev/null || printf '%s' "$EFFECTIVE_KSU_REF")
           BASE_OFFSET=10000
           if grep -q "30000" kernel/Kbuild 2>/dev/null || grep -q "30000" kernel/Makefile 2>/dev/null; then
             BASE_OFFSET=30000
@@ -463,6 +496,40 @@ jobs:
               sed -i "s/KSU_VERSION_TAG_FALLBACK := .*/KSU_VERSION_TAG_FALLBACK := $KSU_VERSION_TAG_SED/g" "$f"
             fi
           done
+
+      - name: Integrate SUSFS Kernel Patch
+        if: ${{ inputs.enable_susfs }}
+        run: |
+          SUSFS_SRC="/tmp/susfs4ksu"
+          rm -rf "$SUSFS_SRC"
+          git clone --depth 1 --branch "${{ inputs.susfs_ref }}" https://gitlab.com/simonpunk/susfs4ksu.git "$SUSFS_SRC"
+
+          cd kernel/common
+
+          cp "$SUSFS_SRC/kernel_patches/fs/susfs.c" fs/susfs.c
+          cp "$SUSFS_SRC/kernel_patches/include/linux/susfs.h" include/linux/susfs.h
+          cp "$SUSFS_SRC/kernel_patches/include/linux/susfs_def.h" include/linux/susfs_def.h
+
+          PATCH_FILE=$(find "$SUSFS_SRC/kernel_patches" -maxdepth 1 -name '50_add_susfs_in_gki-android*.patch' | head -n1)
+          if [ -z "$PATCH_FILE" ]; then
+            echo "Unable to locate the SUSFS kernel patch for ref ${{ inputs.susfs_ref }}"
+            exit 1
+          fi
+          echo "Applying $PATCH_FILE"
+
+          if git apply --check "$PATCH_FILE"; then
+            git apply "$PATCH_FILE"
+          else
+            echo "::warning::git apply --check failed; retrying with patch fuzz"
+            patch -p1 -F3 --no-backup-if-mismatch < "$PATCH_FILE"
+          fi
+
+          if ! grep -q 'susfs_def.h' fs/exec.c; then
+            echo "SUSFS kernel patch verification failed (fs/exec.c is missing the susfs_def.h include)."
+            exit 1
+          fi
+
+          echo "SUSFS kernel patch applied to kernel/common."
 
       - name: Apply x86_64 Syscall Hardening Patches
         if: ${{ matrix.arch == 'x86_64' }}
@@ -692,6 +759,9 @@ jobs:
           KSU Version Code: ${KSU_VERSION}
           KSU Resolved Tag: ${KSU_VERSION_TAG}
           KSU Ref Selector: ${{ inputs.ksu_ref }}
+          SUSFS Enabled: ${SUSFS_ENABLED}
+          SUSFS Kernel Patch Ref: ${{ inputs.susfs_ref }}
+          SUSFS KernelSU Ref: ${{ inputs.susfs_ksu_ref }}
           x86_64 Syscall Hardening Patch Applied: ${KSU_X86_SYSCALL_HARDENING_PATCHED}
           x86_64 Syscall Hardening Default Off: ${KSU_X86_SYSCALL_HARDENING_DEFAULT_OFF}
           x86_64 KernelSU Syscall Check Bypassed: ${KSU_X86_SYSCALL_CHECK_BYPASSED}
