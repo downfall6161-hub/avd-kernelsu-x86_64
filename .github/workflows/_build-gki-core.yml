@@ -137,7 +137,7 @@ jobs:
     name: "Build ${{ matrix.id }} ${{ matrix.arch }}"
     needs: prepare-matrix
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -605,7 +605,12 @@ jobs:
           if [ "$TARGET_ARCH" = "x86_64" ]; then
             run_dist_target //common:kernel_x86_64_dist "${DIST_NAME}/"
           else
-            run_dist_target //common:kernel_aarch64_dist "${DIST_NAME}/"
+            # Build the full virtual-device (emulator) kernel for arm64. This target
+            # embeds the virtual_device vendor symbol list (kmi_symbol_list) so the
+            # AVD's ramdisk modules (e.g. virtio_blk.ko) are accepted, matching the
+            # stock emulator kernel. It also builds the emulator virt modules and
+            # an initramfs.
+            run_dist_target //common-modules/virtual-device:virtual_device_aarch64_dist "${DIST_NAME}/"
           fi
 
       - name: Prepare Artifacts
@@ -621,6 +626,17 @@ jobs:
           cp bzImage ../../output/ 2>/dev/null || true
           cp Image ../../output/ 2>/dev/null || true
           cp Image.gz ../../output/ 2>/dev/null || true
+
+          if [ "$TARGET_ARCH" = "arm64" ]; then
+            # Ship the emulator virt modules and initramfs for potential initrd
+            # rebuilds, plus any boot images produced by the virtual-device target.
+            find . -name '*.ko' -exec cp --parents '{}' ../../output/ \; 2>/dev/null || true
+            cp -r lib ../../output/ 2>/dev/null || true
+            cp initrd* ../../output/ 2>/dev/null || true
+            cp init_boot* ../../output/ 2>/dev/null || true
+            cp boot_* ../../output/ 2>/dev/null || true
+            cp *.dtb ../../output/ 2>/dev/null || true
+          fi
 
           cat > ../../output/build-info.txt << EOF
           Target ID: ${TARGET_ID}
