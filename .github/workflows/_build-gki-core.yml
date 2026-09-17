@@ -580,6 +580,34 @@ jobs:
           echo "KSU_X86_SYSCALL_HARDENING_PATCHED=$KSU_X86_SYSCALL_HARDENING_PATCHED" >> "$GITHUB_ENV"
           echo "KSU_X86_SYSCALL_HARDENING_DEFAULT_OFF=$KSU_X86_SYSCALL_HARDENING_DEFAULT_OFF" >> "$GITHUB_ENV"
 
+      - name: Trust AVD Stock Module Signing Key
+        if: ${{ matrix.arch == 'arm64' }}
+        run: |
+          CERT_SRC=".github/avd-signing-keys/${BUILD_ID}.pem"
+          if [ ! -f "$CERT_SRC" ]; then
+            echo "::warning::No committed AVD stock module signing key for build ${BUILD_ID}. The AVD ramdisk ships modules signed with that build's per-build key, so without it they fail signature verification, are treated as vendor modules, and first-stage init can panic on the trimmed symbol import."
+            exit 0
+          fi
+
+          mkdir -p kernel/common/certs
+          cp "$CERT_SRC" kernel/common/certs/avd_stock_signing_key.pem
+
+          DEFCONFIG="kernel/common/arch/arm64/configs/gki_defconfig"
+          if [ ! -f "$DEFCONFIG" ]; then
+            echo "Error: arm64 gki_defconfig not found at $DEFCONFIG"
+            exit 1
+          fi
+
+          if grep -q '^CONFIG_SYSTEM_TRUSTED_KEYS=' "$DEFCONFIG"; then
+            sed -i 's|^CONFIG_SYSTEM_TRUSTED_KEYS=.*|CONFIG_SYSTEM_TRUSTED_KEYS="certs/avd_stock_signing_key.pem"|' "$DEFCONFIG"
+          else
+            printf 'CONFIG_SYSTEM_TRUSTED_KEYS="certs/avd_stock_signing_key.pem"\n' >> "$DEFCONFIG"
+          fi
+
+          echo "Trusting AVD stock module signing key for build ${BUILD_ID}:"
+          grep '^CONFIG_SYSTEM_TRUSTED_KEYS=' "$DEFCONFIG"
+          openssl x509 -in kernel/common/certs/avd_stock_signing_key.pem -noout -subject -serial
+
       - name: Build GKI Kernel
         run: |
           cd kernel
