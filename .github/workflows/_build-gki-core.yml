@@ -598,10 +598,18 @@ jobs:
             exit 1
           fi
 
+          # gki_defconfig is kept in savedefconfig order and Kleaf's
+          # check_defconfig rejects out-of-order lines, so insert at the
+          # position savedefconfig uses for this symbol.
+          TRUSTED_KEYS_LINE='CONFIG_SYSTEM_TRUSTED_KEYS="certs/avd_stock_signing_key.pem"'
           if grep -q '^CONFIG_SYSTEM_TRUSTED_KEYS=' "$DEFCONFIG"; then
-            sed -i 's|^CONFIG_SYSTEM_TRUSTED_KEYS=.*|CONFIG_SYSTEM_TRUSTED_KEYS="certs/avd_stock_signing_key.pem"|' "$DEFCONFIG"
+            sed -i "s|^CONFIG_SYSTEM_TRUSTED_KEYS=.*|${TRUSTED_KEYS_LINE}|" "$DEFCONFIG"
+          elif grep -q '^CONFIG_TRACE_MMIO_ACCESS=y' "$DEFCONFIG"; then
+            awk -v line="$TRUSTED_KEYS_LINE" \
+              '/^CONFIG_TRACE_MMIO_ACCESS=y/ && !done { print line; done=1 } { print }' \
+              "$DEFCONFIG" > "${DEFCONFIG}.new" && mv "${DEFCONFIG}.new" "$DEFCONFIG"
           else
-            printf 'CONFIG_SYSTEM_TRUSTED_KEYS="certs/avd_stock_signing_key.pem"\n' >> "$DEFCONFIG"
+            printf '%s\n' "$TRUSTED_KEYS_LINE" >> "$DEFCONFIG"
           fi
 
           echo "Trusting AVD stock module signing key for build ${BUILD_ID}:"
