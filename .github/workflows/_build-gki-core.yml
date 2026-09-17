@@ -531,6 +531,23 @@ jobs:
 
           echo "SUSFS kernel patch applied to kernel/common."
 
+      - name: Fix SUSFS SELinux Hide Linkage
+        if: ${{ inputs.enable_susfs }}
+        run: |
+          SELINUX_HIDE="kernel/common/drivers/kernelsu/feature/selinux_hide.c"
+          if [ ! -f "$SELINUX_HIDE" ]; then
+            echo "selinux_hide.c not found; the KernelSU ref does not provide SUSFS glue."
+            exit 1
+          fi
+
+          sed -i -E 's/^static (int security_context_to_sid_with_policy|int security_sid_to_context_with_policy|void security_compute_av_user_with_policy)/\1/' "$SELINUX_HIDE"
+
+          if grep -qE '^static (int security_context_to_sid_with_policy|int security_sid_to_context_with_policy|void security_compute_av_user_with_policy)' "$SELINUX_HIDE"; then
+            echo "Failed to globalize the SUSFS SELinux hide helpers."
+            exit 1
+          fi
+          echo "Globalized SUSFS SELinux hide helpers so kernel/selinux/selinuxfs.c extern references link."
+
       - name: Apply x86_64 Syscall Hardening Patches
         if: ${{ matrix.arch == 'x86_64' }}
         run: |
