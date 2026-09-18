@@ -355,7 +355,7 @@ jobs:
               echo "SUSFS builds require ksu_variant=KernelSU-Next; the dev-susfs fork provides the driver-side SUSFS glue."
               exit 1
             fi
-            KSU_REPO_URL="https://github.com/pershoot/KernelSU-Next.git"
+            KSU_REPO_URL="https://github.com/downfall6161-hub/KernelSU-Next.git"
             KSU_REPO_DIR="KernelSU-Next"
             EFFECTIVE_KSU_REF="${{ inputs.susfs_ksu_ref }}"
             echo "SUSFS enabled: using $KSU_REPO_URL @ $EFFECTIVE_KSU_REF"
